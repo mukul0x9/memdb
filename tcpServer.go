@@ -8,62 +8,62 @@ import (
 	"time"
 )
 
-type logEntry struct {
-	seq  int
-	op   string
-	Key  string
-	Data string
-}
+// type logEntry struct {
+// 	seq  int
+// 	op   string
+// 	Key  string
+// 	Data string
+// }
 
 const bufSize = 100
 
-var appendCh = make(chan logEntry, 100)
+// var appendCh = make(chan logEntry, 100)
 
 const maxBatch = 100
 const flushInterval = 50 * time.Millisecond
 
-func flushBufferToDisk(buffer []logEntry) {
+//func flushBufferToDisk(buffer []logEntry) {
 
-}
+//}
 
-func bufferLogWriter(seq int) {
-	buffer := []logEntry{}
+// func bufferLogWriter(seq int) {
+// 	buffer := []logEntry{}
 
-	ticker := time.NewTicker(500 * time.Millisecond)
+// 	ticker := time.NewTicker(500 * time.Millisecond)
 
-	defer ticker.Stop()
+// 	defer ticker.Stop()
 
-	flush := func() {
-		if len(buffer) == 0 {
-			return
-		}
-		flushBufferToDisk(buffer)
-		buffer = buffer[:0]
-	}
+// 	flush := func() {
+// 		if len(buffer) == 0 {
+// 			return
+// 		}
+// 		flushBufferToDisk(buffer)
+// 		buffer = buffer[:0]
+// 	}
 
-	for {
-		select {
-		case data, ok := <-appendCh:
-			if !ok {
-				flush()
-				return
-			}
-			seq++
-			data.seq = seq
-			buffer = append(buffer, data)
+// 	for {
+// 		select {
+// 		case data, ok := <-appendCh:
+// 			if !ok {
+// 				flush()
+// 				return
+// 			}
+// 			seq++
+// 			data.seq = seq
+// 			buffer = append(buffer, data)
 
-			if len(buffer) >= 100 {
-				flush()
-			}
+// 			if len(buffer) >= 100 {
+// 				flush()
+// 			}
 
-		case <-ticker.C:
-			flush()
-		}
-	}
+// 		case <-ticker.C:
+// 			flush()
+// 		}
+// 	}
 
-}
+// }
 
-func tcpListener(globalKV map[string]string) {
+func listener(db *DB) {
 
 	listner, err := net.Listen("tcp", ":8888")
 
@@ -80,13 +80,13 @@ func tcpListener(globalKV map[string]string) {
 			log.Println("error accepting conn", err)
 		}
 
-		handleConnection(conn, globalKV)
+		handleConnection(conn, db)
 
 	}
 
 }
 
-func handleConnection(conn net.Conn, globalkv map[string]string) {
+func handleConnection(conn net.Conn, db *DB) {
 
 	defer conn.Close()
 
@@ -113,12 +113,16 @@ func handleConnection(conn net.Conn, globalkv map[string]string) {
 		switch operation {
 		case "SET":
 			value := strings.Join(parts[2:], " ")
-			entry := logEntry{op: operation, Key: key, Data: value}
-			appendCh <- entry
-			set(globalkv, key, value)
+			// entry := logEntry{op: operation, Key: key, Data: value}
+			// appendCh <- entry
+			db.set(key, value)
 			response(operation, conn, key)
 		case "GET":
-			data := get(globalkv, key)
+			data, ok := db.get(key)
+
+			if !ok {
+				response(operation, conn, "")
+			}
 
 			response(operation, conn, data)
 		default:
@@ -151,10 +155,10 @@ func response(operation string, conn net.Conn, data string) {
 	}
 }
 
-func set(kv map[string]string, key string, value string) {
-	kv[key] = value
-}
+// func set(kv map[string]string, key string, value string) {
+// 	kv[key] = value
+// }
 
-func get(kv map[string]string, key string) string {
-	return kv[key]
-}
+// func get(kv map[string]string, key string) string {
+// 	return kv[key]
+// }

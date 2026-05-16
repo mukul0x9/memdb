@@ -1,10 +1,9 @@
 package main
 
-package main
-
 import (
 	"bytes"
 	"encoding/binary"
+
 	"sync"
 )
 
@@ -13,6 +12,12 @@ const (
 	HeaderSize = 12
 	ChunkSize  = 1024 * 1024
 )
+
+type Command struct {
+	Operation string
+	Key       string
+	Value     string
+}
 
 type shard struct {
 	mu sync.RWMutex
@@ -73,10 +78,9 @@ func findEntryOffset(arena []byte, targetKey string, offset uint32) (uint32, boo
 }
 
 func writeHeader(headerByteBuffer []byte, a arenaHeader) {
-
-	binary.LittleEndian.PutUint32(headerByteBuffer, a.keyLen)
-	binary.LittleEndian.PutUint32(headerByteBuffer, a.valLen)
-	binary.LittleEndian.PutUint32(headerByteBuffer, a.nextOffset)
+	binary.LittleEndian.PutUint32(headerByteBuffer[0:4], a.keyLen)
+	binary.LittleEndian.PutUint32(headerByteBuffer[4:8], a.valLen)
+	binary.LittleEndian.PutUint32(headerByteBuffer[8:12], a.nextOffset)
 
 }
 
@@ -87,6 +91,7 @@ func getNextOffsetOfCurrent(arena []byte, offset uint32) (nextOffset uint32) {
 
 func readEntry(arena []byte, offset uint32) (key []byte, value []byte, valLen uint32, nextOffset uint32) {
 	keyLen := binary.LittleEndian.Uint32(arena[offset : offset+4])
+
 	valLen = binary.LittleEndian.Uint32(arena[offset+4 : offset+8])
 	nextOffset = binary.LittleEndian.Uint32(arena[offset+8 : offset+12])
 
@@ -96,6 +101,7 @@ func readEntry(arena []byte, offset uint32) (key []byte, value []byte, valLen ui
 	valEnd := valStart + valLen
 
 	key = arena[keyStart:keyEnd]
+
 	value = arena[valStart:valEnd]
 	return
 }
@@ -148,57 +154,6 @@ func rebuildBucket(old []byte, bucketLen int) []uint32 {
 
 }
 
-func (db *DB) set(key string, value string) {
-	h := hashIndex(key)
-	s := db.getShard(h)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	finalIndex := h % uint32(len(s.buckets))
-
-	keyByte := []byte(key)
-	valueByte := []byte(value)
-
-	nextOffset := s.buckets[finalIndex]
-
-	entrySize := HeaderSize + len(key) + len(value)
-
-	loadFactor := float64(s.bucketEntryCount) / float64(len(s.buckets))
-
-	if loadFactor > 0.8 {
-		s.buckets = rebuildBucket(s.arena, len(s.buckets)*2)
-		finalIndex = h % uint32(len(s.buckets))
-		nextOffset = s.buckets[finalIndex]
-
-	}
-
-	if len(s.arena)+entrySize > cap(s.arena) {
-		s.arena = growArena(s.arena, entrySize)
-	}
-
-	headerStruct := arenaHeader{
-		keyLen:     uint32(len(keyByte)),
-		valLen:     uint32(len(valueByte)),
-		nextOffset: nextOffset,
-	}
-
-	headerBuffer := make([]byte, HeaderSize)
-
-	writeHeader(headerBuffer, headerStruct)
-
-	newOffset := uint32(len(s.arena))
-
-	s.arena = append(s.arena, headerBuffer...)
-	s.arena = append(s.arena, keyByte...)
-	s.arena = append(s.arena, valueByte...)
-
-	s.buckets[finalIndex] = newOffset
-
-	s.bucketEntryCount++
-
-}
-
 func getValue(arena []byte, targetKey string, offset uint32) (string, bool) {
 	cur := offset
 
@@ -214,58 +169,5 @@ func getValue(arena []byte, targetKey string, offset uint32) (string, bool) {
 	}
 
 	return "", false
-
-}
-func (db *DB) get(key string) (string, bool) {
-	h := hashIndex(key)
-	s := db.getShard(h)
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	finalIndex := h % uint32(len(s.buckets))
-
-	if s.buckets[finalIndex] != 0 {
-		offset := s.buckets[finalIndex]
-
-		value, ok := getValue(s.arena, key, offset)
-
-		if ok {
-			return value, true
-		}
-
-		return "", false
-
-	}
-
-	return "", false
-
-}
-
-func (db *DB) del(key string) (string, bool) {
-
-	h := hashIndex(key)
-	s := db.getShard(h)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	finalIndex := h % uint32(len(s.buckets))
-
-	if s.buckets[finalIndex] != 0 {
-
-		entryOffset, ok := findEntryOffset(s.arena, key, s.buckets[finalIndex])
-
-		if ok {
-
-			binary.LittleEndian.PutUint32(s.arena[entryOffset+4:entryOffset+8], uint32(0))
-
-			return "DELETED", true
-
-		}
-
-	}
-
-	return "no key value exist", false
 
 }
