@@ -17,7 +17,7 @@ func main() {
 
 func getMemoryLimit() int64 {
 	// Default: 512 MB
-	const defaultLimit = int64(10 * 1024)
+	const defaultLimit = int64(512 * 1024 * 1024)
 
 	value := os.Getenv("CACHE_MEMORY_LIMIT")
 	if value == "" {
