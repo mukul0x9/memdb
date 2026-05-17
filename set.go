@@ -5,6 +5,7 @@ import (
 )
 
 func (db *DB) set(key string, value string) error {
+
 	h := hashIndex(key)
 	s := db.getShard(h)
 
@@ -14,6 +15,17 @@ func (db *DB) set(key string, value string) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if len(s.arena) >= MinArenaSize {
+		if float64(s.wastedBytes)/float64(len(s.arena)) >= WasteRatioThreshold && !s.isEnqueued {
+			s.isEnqueued = true
+			select {
+			case db.queue <- h:
+			default:
+				s.isEnqueued = false
+			}
+		}
+	}
 
 	if len(s.buckets) == 0 {
 		return fmt.Errorf("buckets not initialized")
@@ -26,7 +38,23 @@ func (db *DB) set(key string, value string) error {
 
 	nextOffset := s.buckets[finalIndex]
 
+	oldOffset, found := findEntryOffset(s.arena, key, nextOffset)
+
+	if found {
+		oldKey, oldValue, _, _ := readEntry(s.arena, oldOffset)
+		oldSize := HeaderSize + len(oldKey) + len(oldValue)
+		s.wastedBytes += uint32(oldSize)
+	}
+
 	entrySize := HeaderSize + len(key) + len(value)
+
+	currentMemory := db.usedMemory()
+
+	// Reject if this write would exceed maxMemory
+	if currentMemory+int64(entrySize) > db.maxMemory {
+
+		return fmt.Errorf("OOM: maxmemory limit reached")
+	}
 
 	loadFactor := float64(s.bucketEntryCount) / float64(len(s.buckets))
 
@@ -68,7 +96,9 @@ func (db *DB) set(key string, value string) error {
 
 	s.buckets[finalIndex] = newOffset
 
-	s.bucketEntryCount++
+	if !found {
+		s.bucketEntryCount++
+	}
 
 	return nil
 }

@@ -61,7 +61,8 @@ func handleCon(conn net.Conn, db *DB) {
 			data := db.set(cmd.Key, cmd.Value)
 
 			if data != nil {
-				responseWriter(conn, "server error")
+
+				responseWriter(conn, "server error"+data.Error())
 
 			} else {
 				responseWriter(conn, "ok")

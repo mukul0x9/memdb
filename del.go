@@ -20,6 +20,15 @@ func (db *DB) del(key string) (string, bool) {
 
 			binary.LittleEndian.PutUint32(s.arena[entryOffset+4:entryOffset+8], uint32(0))
 
+			if s.bucketEntryCount > 0 {
+				s.bucketEntryCount--
+			}
+
+			keyBytes, valueBytes, _, _ := readEntry(s.arena, entryOffset)
+
+			entrySize := HeaderSize + len(keyBytes) + len(valueBytes)
+			s.wastedBytes += uint32(entrySize)
+
 			return "DELETED", true
 
 		}

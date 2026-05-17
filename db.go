@@ -3,14 +3,18 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
+	"time"
 
 	"sync"
 )
 
 const (
-	NumShards  = 256
-	HeaderSize = 12
-	ChunkSize  = 1024 * 1024
+	NumShards           = 256
+	HeaderSize          = 12
+	ChunkSize           = 1024 * 1024
+	WasteRatioThreshold = 0.25
+	MinArenaSize        = 1 << 20 // 1 MB
 )
 
 type Command struct {
@@ -26,6 +30,8 @@ type shard struct {
 	arena   []byte
 
 	bucketEntryCount uint32
+	wastedBytes      uint32
+	isEnqueued       bool
 }
 
 type arenaHeader struct {
@@ -35,16 +41,138 @@ type arenaHeader struct {
 }
 
 type DB struct {
-	shards [NumShards]shard
+	shards    [NumShards]shard
+	queue     chan uint32
+	maxMemory int64
 }
 
 func (db *DB) Init() {
+	db.maxMemory = getMemoryLimit()
+	db.queue = make(chan uint32, len(db.shards))
+
 	for i := range db.shards {
 		db.shards[i] = shard{
 			buckets: make([]uint32, 1024),
 			arena:   make([]byte, 1, ChunkSize),
 		}
 	}
+}
+
+func (db *DB) StartCompactionWorker() {
+	go func() {
+		// loop reads from the channel sequentially.
+
+		for shardID := range db.queue {
+			s := db.getShard(shardID)
+			if s == nil {
+				continue
+			}
+
+			s.CompactSingleThreaded()
+
+			s.mu.Lock()
+			s.isEnqueued = false
+			s.mu.Unlock()
+		}
+	}()
+}
+
+func (s *shard) CompactSingleThreaded() {
+	start := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fmt.Printf(
+		"Compacting shard: arena=%d wasted=%d\n",
+		len(s.arena),
+		s.wastedBytes,
+	)
+	if s.wastedBytes == 0 || len(s.arena) <= 1 {
+		return
+	}
+
+	newBuckets := make([]uint32, len(s.buckets))
+
+	liveBytes := len(s.arena) - int(s.wastedBytes)
+	if liveBytes < 1 {
+		liveBytes = 1
+	}
+
+	newArena := make([]byte, 1, liveBytes)
+
+	var activeEntries uint32
+
+	for i := 0; i < len(s.buckets); i++ {
+
+		seen := make(map[string]struct{})
+
+		offset := s.buckets[i]
+
+		for offset != 0 {
+			key, value, valLen, nextOffset := readEntry(s.arena, offset)
+
+			// Skip deleted entries
+			if valLen == 0 {
+				offset = nextOffset
+				continue
+			}
+
+			keyStr := string(key)
+
+			if _, exists := seen[keyStr]; exists {
+				offset = nextOffset
+				continue
+			}
+
+			newOffset := uint32(len(newArena))
+
+			header := arenaHeader{
+				keyLen:     uint32(len(key)),
+				valLen:     uint32(len(value)),
+				nextOffset: newBuckets[i],
+			}
+
+			headerBuf := make([]byte, HeaderSize)
+			writeHeader(headerBuf, header)
+
+			newArena = append(newArena, headerBuf...)
+			newArena = append(newArena, key...)
+			newArena = append(newArena, value...)
+
+			newBuckets[i] = newOffset
+			activeEntries++
+
+			offset = nextOffset
+		}
+
+		fmt.Printf("Compaction finished in %v\n", time.Since(start))
+
+	}
+
+	s.arena = newArena
+	s.buckets = newBuckets
+	s.bucketEntryCount = activeEntries
+	s.wastedBytes = 0
+}
+func (db *DB) usedMemory() int64 {
+	var total int64
+
+	for i := range db.shards {
+		total += int64(len(db.shards[i].arena))
+		total += int64(len(db.shards[i].buckets) * 4)
+	}
+
+	return total
+}
+
+func (db *DB) reservedMemory() int64 {
+	var total int64
+
+	for i := range db.shards {
+		total += int64(cap(db.shards[i].arena))
+		total += int64(len(db.shards[i].buckets) * 4)
+	}
+
+	return total
 }
 
 func (db *DB) getShard(hash uint32) *shard {
@@ -127,6 +255,7 @@ func writeNextOffset(arena []byte, offset uint32, nextOffset uint32) {
 }
 
 func rebuildBucket(old []byte, bucketLen int) []uint32 {
+	fmt.Println("rebuilding buckets...")
 	buckets := make([]uint32, bucketLen)
 
 	offset := uint32(1)
@@ -134,6 +263,8 @@ func rebuildBucket(old []byte, bucketLen int) []uint32 {
 	for offset < uint32(len(old)) {
 
 		key, value, vallen, _ := readEntry(old, offset)
+
+		entrySize := uint32(HeaderSize + len(key) + len(value))
 
 		if vallen != 0 {
 			hash := hashIndex(string(key))
@@ -145,8 +276,7 @@ func rebuildBucket(old []byte, bucketLen int) []uint32 {
 			buckets[finalIndex] = offset
 
 		}
-
-		offset += uint32(HeaderSize + len(key) + len(value))
+		offset += entrySize
 
 	}
 
