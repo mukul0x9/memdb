@@ -2,165 +2,217 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"fmt"
-	"io"
 	"math/rand"
 	"net"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-const (
-	serverAddr = "127.0.0.1:8888"
-
-	numKeys    = 1_000_000
-	keyLength  = 10
-	valueSize  = 100
-
-	numWorkers = 100
-	testTime   = 5 * time.Second
-)
-
-const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-
-var globalRNG = rand.New(rand.NewSource(time.Now().UnixNano()))
+type Response struct {
+	WorkerID int
+	Command  string
+	Response string
+	Error    error
+}
 
 func main() {
-	// Pre-generate keys
-	keys := make([]string, numKeys)
-	for i := range keys {
-		keys[i] = randomString(keyLength)
+	var wg sync.WaitGroup
+
+	numGoroutines := 100
+	responses := make(chan Response, numGoroutines)
+	done := make(chan struct{})
+
+	timeout := 5 * time.Second
+
+	go func() {
+		time.Sleep(timeout)
+		close(done)
+	}()
+
+	count := 10000
+	stringsArray := make([]string, count)
+
+	commandString := []string{
+		"SET",
+		"GET",
+		"DEL",
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), testTime)
-	defer cancel()
-
-	var totalRequests uint64
-	var totalErrors uint64
-
-	var getCount uint64
-	var setCount uint64
-	var delCount uint64
-
-	var wg sync.WaitGroup
-	wg.Add(numWorkers)
+	for i := 0; i < count; i++ {
+		stringsArray[i] = generateRandomString(10)
+	}
 
 	start := time.Now()
+	var statsWG sync.WaitGroup
+	statsWG.Add(1)
+	go func() {
 
-	for i := 0; i < numWorkers; i++ {
-		go func(workerID int) {
+		defer statsWG.Done()
+
+		var totalOps int
+		var totalErrors int
+
+		var setOps int
+		var getOps int
+		var delOps int
+
+		var setSuccess int
+		var getHits int
+		var getMisses int
+		var delSuccess int
+		for response := range responses {
+			if response.Error != nil {
+				totalErrors++
+				continue
+			}
+
+			totalOps++
+
+			// Remove trailing newline characters.
+			resp := strings.TrimSpace(response.Response)
+
+			switch response.Command {
+			case "SET":
+				setOps++
+				if resp == "ok" {
+					setSuccess++
+				}
+
+			case "GET":
+				getOps++
+				if resp == "NO_DATA_FOUND" {
+					getMisses++
+				} else {
+					getHits++
+				}
+
+			case "DEL":
+				delOps++
+				if resp == "DELETED" {
+					delSuccess++
+				}
+			}
+
+		}
+
+		elapsed := time.Since(start)
+
+		fmt.Println("\n========== Benchmark Results ==========")
+		fmt.Printf("Duration:        %v\n", elapsed)
+		fmt.Printf("Total Ops:       %d\n", totalOps)
+		fmt.Printf("Throughput:      %.2f ops/sec\n",
+			float64(totalOps)/elapsed.Seconds())
+		fmt.Printf("Errors:          %d\n", totalErrors)
+
+		fmt.Println("\nCommand Breakdown")
+		fmt.Printf("SET Ops:         %d (successful: %d)\n",
+			setOps, setSuccess)
+		fmt.Printf("GET Ops:         %d (hits: %d, misses: %d)\n",
+			getOps, getHits, getMisses)
+		fmt.Printf("DEL Ops:         %d (deleted: %d)\n",
+			delOps, delSuccess)
+		fmt.Println("=======================================")
+	}()
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			conn, err := net.Dial("tcp", "localhost:8888")
 			defer wg.Done()
-
-			// One TCP connection per worker (much faster than reconnecting every request)
-			conn, err := net.Dial("tcp", serverAddr)
 			if err != nil {
-				atomic.AddUint64(&totalErrors, 1)
+				fmt.Printf("Goroutine %d: failed to connect", id)
 				return
 			}
+			reader := bufio.NewReader(conn)
 			defer conn.Close()
 
-			reader := bufio.NewReader(conn)
-
-			// Per-worker RNG
-			rng := rand.New(rand.NewSource(time.Now().UnixNano() + int64(workerID)))
+			rng := rand.New(rand.NewSource(time.Now().UnixNano() + int64(id)))
 
 			for {
 				select {
-				case <-ctx.Done():
+				case <-done:
 					return
 				default:
+
+					keyString := stringsArray[rng.Intn(count)]
+
+					command := commandString[rng.Intn(len(commandString))]
+
+					if command == "SET" {
+						valueString := generateRandomString(10)
+						_, err := conn.Write([]byte(command + " " + keyString + " " + valueString + "\n"))
+						if err != nil {
+							fmt.Printf("Goroutine %d: failed to write", id)
+							continue
+						}
+					} else if command == "GET" {
+						_, err := conn.Write([]byte(command + " " + keyString + "\n"))
+						if err != nil {
+							fmt.Printf("Goroutine %d: failed to write", id)
+							continue
+						}
+					} else if command == "DEL" {
+						_, err := conn.Write([]byte(command + " " + keyString + "\n"))
+						if err != nil {
+							fmt.Printf("Goroutine %d: failed to write", id)
+							continue
+						}
+
+					}
+					var fullResponse strings.Builder
+					for {
+						response, err := reader.ReadString('\n')
+						if err != nil {
+							fmt.Printf("Goroutine %d: failed to read: %v\n", id, err)
+							break
+						}
+
+						response = strings.TrimRight(response, "\r\n")
+
+						// END marks the end of this command's response.
+						if response == "END" {
+							break
+						}
+
+						fullResponse.WriteString(response)
+						fullResponse.WriteString("\n")
+					}
+
+					responses <- Response{
+						WorkerID: id,
+						Command:  command,
+						Response: fullResponse.String(),
+						Error:    nil,
+					}
+
 				}
-
-				key := keys[rng.Intn(len(keys))]
-				op := rng.Intn(100)
-
-				var cmd string
-				var counter *uint64
-
-				switch {
-				case op < 70: // 70% GET
-					cmd = fmt.Sprintf("GET %s\r\n", key)
-					counter = &getCount
-
-				case op < 90: // 20% SET
-					value := randomString(valueSize)
-					cmd = fmt.Sprintf("SET %s %s\r\n", key, value)
-					counter = &setCount
-
-				default: // 10% DEL
-					cmd = fmt.Sprintf("DEL %s\r\n", key)
-					counter = &delCount
-				}
-
-				if err := sendCommand(conn, reader, cmd); err != nil {
-					atomic.AddUint64(&totalErrors, 1)
-					return
-				}
-
-				atomic.AddUint64(&totalRequests, 1)
-				atomic.AddUint64(counter, 1)
 			}
 		}(i)
 	}
-
 	wg.Wait()
+	close(responses)
+	statsWG.Wait()
+	fmt.Println("All goroutines have finished")
 
-	elapsed := time.Since(start)
-
-	total := atomic.LoadUint64(&totalRequests)
-	errors := atomic.LoadUint64(&totalErrors)
-
-	fmt.Printf("\n===== Benchmark Results =====\n")
-	fmt.Printf("Duration: %.2f sec\n", elapsed.Seconds())
-	fmt.Printf("Workers: %d\n", numWorkers)
-	fmt.Printf("Total Success: %d\n", total)
-	fmt.Printf("Errors: %d\n", errors)
-	fmt.Printf("Throughput: %.2f req/sec\n", float64(total)/elapsed.Seconds())
-	fmt.Printf("GET: %d\n", atomic.LoadUint64(&getCount))
-	fmt.Printf("SET: %d\n", atomic.LoadUint64(&setCount))
-	fmt.Printf("DEL: %d\n", atomic.LoadUint64(&delCount))
 }
 
-// sendCommand sends one command and reads until END
-func sendCommand(conn net.Conn, reader *bufio.Reader, cmd string) error {
-	_, err := conn.Write([]byte(cmd))
-	if err != nil {
-		return err
+func generateRandomString(length int) string {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[rand.Intn(len(charset))]
 	}
-
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				return fmt.Errorf("server disconnected")
-			}
-			return err
-		}
-
-		line = strings.TrimRight(line, "\r\n")
-
-		if line == "END" {
-			return nil
-		}
-
-
-	}
+	return string(b)
 }
 
-
-func randomString(n int) string {
-	for {
-		b := make([]byte, n)
-		for i := range b {
-			b[i] = charset[globalRNG.Intn(len(charset))]
-		}
-
-		s := string(b)
-		if !strings.HasPrefix(s, "ERR") {
-			return s
-		}
+func getRandomCommand() string {
+	r := rand.Float64()
+	if r < 0.4 {
+		return "GET"
+	} else if r < 0.7 {
+		return "SET"
 	}
+	return "DEL"
 }
