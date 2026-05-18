@@ -34,7 +34,18 @@ func tcpListener(db *DB) {
 }
 
 func handleCon(conn net.Conn, db *DB) {
+	defer func() {
+			if r := recover(); r != nil {
+				log.Printf("CRITICAL: Recovered from panic in worker connection: %v", r)
 
+				// Inform the benchmark client so it registers as a StatusServerError
+				responseWriter(conn, "ERROR_SERVER_PANIC")
+				responseWriter(conn, "END")
+
+				// Explicitly close the connection so the worker client doesn't freeze waiting for data
+				conn.Close()
+			}
+		}()
 	defer conn.Close()
 
 	reader := bufio.NewReader(conn)
@@ -50,6 +61,7 @@ func handleCon(conn net.Conn, db *DB) {
 			}
 
 			responseWriter(conn, err.Error())
+			responseWriter(conn, "END")
 			continue
 		}
 
@@ -58,36 +70,52 @@ func handleCon(conn net.Conn, db *DB) {
 
 			// entry := logEntry{op: operation, Key: key, Data: value}
 			// appendCh <- entry
+			//
+
 			data := db.set(cmd.Key, cmd.Value)
 
 			if data != nil {
 
-				responseWriter(conn, "server error"+data.Error())
+				fmt.Println(data.Error())
+
+				responseWriter(conn, "ERROR_SERVER"+data.Error())
+				responseWriter(conn, "END")
 
 			} else {
 				responseWriter(conn, "ok")
+				responseWriter(conn, "END")
 			}
 
 		case "GET":
 			data, ok := db.get(cmd.Key)
 
 			if !ok {
-				responseWriter(conn, "No data found")
+				responseWriter(conn, "NO_DATA_FOUND")
+				responseWriter(conn, "END")
 			} else {
 				responseWriter(conn, data)
+				responseWriter(conn, "END")
 			}
 
 		case "DEL":
 			data, ok := db.del(cmd.Key)
 
 			if !ok {
-				responseWriter(conn, "No data found")
+				responseWriter(conn, "NO_DATA_FOUND")
+				responseWriter(conn, "END")
 			} else {
 				responseWriter(conn, data)
+				responseWriter(conn, "END")
 			}
 
+		case "STATS":
+			stats := db.Stats()
+			responseWriter(conn, stats)
+			responseWriter(conn, "END")
+
 		default:
-			responseWriter(conn, "Wrong operation")
+			responseWriter(conn, "ERROR_INVALID_OPERATION")
+			responseWriter(conn, "END")
 
 		}
 

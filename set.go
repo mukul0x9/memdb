@@ -7,6 +7,7 @@ import (
 func (db *DB) set(key string, value string) error {
 
 	h := hashIndex(key)
+
 	s := db.getShard(h)
 
 	if s == nil {
@@ -48,12 +49,12 @@ func (db *DB) set(key string, value string) error {
 
 	entrySize := HeaderSize + len(key) + len(value)
 
-	currentMemory := db.usedMemory()
+	newTotal := db.usedBytes.Add(int64(entrySize))
 
 	// Reject if this write would exceed maxMemory
-	if currentMemory+int64(entrySize) > db.maxMemory {
-
-		return fmt.Errorf("OOM: maxmemory limit reached")
+	if newTotal > db.maxMemory {
+		db.usedBytes.Add(-int64(entrySize))
+		return fmt.Errorf("OOM(out of memory): maxmemory limit reached")
 	}
 
 	loadFactor := float64(s.bucketEntryCount) / float64(len(s.buckets))
@@ -62,6 +63,7 @@ func (db *DB) set(key string, value string) error {
 		newBuckets := rebuildBucket(s.arena, len(s.buckets)*2)
 
 		if len(newBuckets) == 0 {
+			db.usedBytes.Add(-int64(entrySize))
 			return fmt.Errorf("failed to rebuild buckets")
 		}
 		s.buckets = newBuckets
@@ -74,6 +76,7 @@ func (db *DB) set(key string, value string) error {
 		s.arena = growArena(s.arena, entrySize)
 
 		if len(s.arena)+entrySize > cap(s.arena) {
+			db.usedBytes.Add(-int64(entrySize))
 			return fmt.Errorf("arena growth failed")
 		}
 	}
@@ -98,6 +101,7 @@ func (db *DB) set(key string, value string) error {
 
 	if !found {
 		s.bucketEntryCount++
+		db.totalKeys.Add(1)
 	}
 
 	return nil

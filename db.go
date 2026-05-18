@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"time"
+	"hash/fnv"
+	"strings"
+
+	"sync/atomic"
 
 	"sync"
 )
@@ -44,48 +47,92 @@ type DB struct {
 	shards    [NumShards]shard
 	queue     chan uint32
 	maxMemory int64
+	usedBytes atomic.Int64
+	totalKeys atomic.Int64
 }
 
 func (db *DB) Init() {
 	db.maxMemory = getMemoryLimit()
 	db.queue = make(chan uint32, len(db.shards))
 
+	db.usedBytes.Store(int64(NumShards))
+
 	for i := range db.shards {
 		db.shards[i] = shard{
-			buckets: make([]uint32, 1024),
+			buckets: make([]uint32, 16384),
 			arena:   make([]byte, 1, ChunkSize),
 		}
 	}
 }
 
+func (db *DB) Stats() string {
+	used := db.usedBytes.Load()
+	max := db.maxMemory
+	keys := db.totalKeys.Load()
+
+	// Build 30-character usage bar
+	const barWidth = 30
+
+	var filled int
+	if max > 0 {
+		filled = int((used * barWidth) / max)
+		if filled > barWidth {
+			filled = barWidth
+		}
+	}
+
+	bar := strings.Repeat("█", filled) +
+		strings.Repeat("░", barWidth-filled)
+
+	percent := float64(used) * 100 / float64(max)
+
+	return fmt.Sprintf(
+		"MEMORY USAGE\n"+
+			"[%s] %.2f%%\n\n"+
+			"Used Memory    : %d bytes\n"+
+			"Max Memory     : %d bytes\n"+
+			"Live Keys      : %d\n"+
+			"Queue Length   : %d\n",
+		bar,
+		percent,
+		used,
+		max,
+		keys,
+		len(db.queue),
+	)
+}
+
+
 func (db *DB) StartCompactionWorker() {
 	go func() {
-		// loop reads from the channel sequentially.
-
 		for shardID := range db.queue {
-			s := db.getShard(shardID)
-			if s == nil {
-				continue
-			}
-
-			s.CompactSingleThreaded()
-
-			s.mu.Lock()
-			s.isEnqueued = false
-			s.mu.Unlock()
+			db.compactShard(shardID)
 		}
 	}()
 }
 
-func (s *shard) CompactSingleThreaded() {
-	start := time.Now()
+func (db *DB) compactShard(shardID uint32) {
+	s := db.getShard(shardID)
+	if s == nil {
+		return
+	}
+
+	defer func() {
+		s.mu.Lock()
+		s.isEnqueued = false
+		s.mu.Unlock()
+	}()
+
+	s.CompactSingleThreaded(db)
+}
+
+func (s *shard) CompactSingleThreaded(db *DB) {
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fmt.Printf(
-		"Compacting shard: arena=%d wasted=%d\n",
-		len(s.arena),
-		s.wastedBytes,
-	)
+
+	oldArenaLen := len(s.arena)
+
 	if s.wastedBytes == 0 || len(s.arena) <= 1 {
 		return
 	}
@@ -123,6 +170,8 @@ func (s *shard) CompactSingleThreaded() {
 				continue
 			}
 
+			seen[keyStr] = struct{}{}
+
 			newOffset := uint32(len(newArena))
 
 			header := arenaHeader{
@@ -144,15 +193,19 @@ func (s *shard) CompactSingleThreaded() {
 			offset = nextOffset
 		}
 
-		fmt.Printf("Compaction finished in %v\n", time.Since(start))
-
 	}
 
 	s.arena = newArena
 	s.buckets = newBuckets
 	s.bucketEntryCount = activeEntries
 	s.wastedBytes = 0
+
+	savedBytes := int64(oldArenaLen) - int64(len(newArena))
+
+	db.usedBytes.Add(-savedBytes)
+
 }
+
 func (db *DB) usedMemory() int64 {
 	var total int64
 
@@ -180,13 +233,17 @@ func (db *DB) getShard(hash uint32) *shard {
 }
 
 func hashIndex(key string) uint32 {
-	var h uint32
+	// var h uint32
 
-	for i := 0; i < len(key); i++ {
-		h = h*31 + uint32(key[i])
-	}
+	// for i := 0; i < len(key); i++ {
+	// 	h = h*31 + uint32(key[i])
+	// }
 
-	return h
+	// return h
+	//
+	h := fnv.New32a()
+	h.Write([]byte(key))
+	return h.Sum32()
 }
 
 func findEntryOffset(arena []byte, targetKey string, offset uint32) (uint32, bool) {
@@ -255,7 +312,6 @@ func writeNextOffset(arena []byte, offset uint32, nextOffset uint32) {
 }
 
 func rebuildBucket(old []byte, bucketLen int) []uint32 {
-	fmt.Println("rebuilding buckets...")
 	buckets := make([]uint32, bucketLen)
 
 	offset := uint32(1)

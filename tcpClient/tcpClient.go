@@ -20,8 +20,15 @@ func main() {
 		os.Exit(1)
 	}
 	defer conn.Close()
-	fmt.Println("Connected! .")
-	fmt.Println("-------------------------------------------------------------------")
+
+	fmt.Println("Connected!")
+	fmt.Println("Type commands like:")
+	fmt.Println("  SET HELLO WORLD")
+	fmt.Println("  GET HELLO")
+	fmt.Println("  DEL HELLO")
+	fmt.Println("  STATS")
+
+	fmt.Println("------------------------------------------------------------")
 
 	userInputReader := bufio.NewReader(os.Stdin)
 	serverReader := bufio.NewReader(conn)
@@ -29,36 +36,47 @@ func main() {
 	for {
 		fmt.Print("You: ")
 
-		//  Wait for user input
+		// Read user input
 		input, err := userInputReader.ReadString('\n')
 		if err != nil {
 			fmt.Printf("Error reading input: %v\n", err)
 			break
 		}
 
-		if input == "exit\n" {
+		input = strings.TrimRight(input, "\r\n")
+
+		if input == "exit" {
 			fmt.Println("Exiting...")
 			break
 		}
 
-		input = strings.Replace(input, "\r\n", "\n", -1)
-
-		_, err = conn.Write([]byte(input))
+		// Send command to server
+		_, err = conn.Write([]byte(input + "\r\n"))
 		if err != nil {
 			fmt.Printf("Error sending data: %v\n", err)
 			break
 		}
 
-		reply, err := serverReader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				fmt.Println("\n[Server disconnected]")
-			} else {
-				fmt.Printf("\n[Error reading from server: %v]\n", err)
+		// Read response until END marker
+		for {
+			reply, err := serverReader.ReadString('\n')
+			if err != nil {
+				if err == io.EOF {
+					fmt.Println("\n[Server disconnected]")
+				} else {
+					fmt.Printf("\n[Error reading from server: %v]\n", err)
+				}
+				return
 			}
-			break
-		}
 
-		fmt.Printf("Server: %s", reply)
+			reply = strings.TrimRight(reply, "\r\n")
+
+			// END marks end of server response
+			if reply == "END" {
+				break
+			}
+
+			fmt.Println("Server:", reply)
+		}
 	}
 }
