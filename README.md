@@ -113,7 +113,7 @@ Load test: 100 concurrent TCP connections, mixed SET/GET/DEL, 5 second window.
 - Throughput: 79k ops/sec
 
 ## Caveats
-This is a learning project. Known gaps: no persistence, incomplete edge case handling, no clean code as its a learning project for go.
+This is a learning project. Known gaps: no persistence, incomplete edge case handling
 
 ## References
 - https://github.com/allegro/bigcache
