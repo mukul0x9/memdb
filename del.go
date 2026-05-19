@@ -31,7 +31,7 @@ func (db *DB) del(key string) (string, bool) {
 
 			s.wastedBytes += uint32(entrySize)
 
-			db.usedBytes.Add(-int64(entrySize))
+			//db.usedBytes.Add(-int64(entrySize))
 
 			return "DELETED", true
 
