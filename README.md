@@ -29,46 +29,12 @@ A single global mutex locks all reads and writes. Sharding distributes lock owne
 - arena array 
 - [keyLen | valueLen | nextOffset | keyBytes | valueBytes|keyLen | valueLen | nextOffset | keyBytes | valueBytes|....]
 
-┌──────────────────────────────────────────────────────────────────────┐
-│                           bucketArray                                │
-│        (Hash table buckets store offsets into the arena)             │
-└──────────────────────────────────────────────────────────────────────┘
-Index      0        1        2        3        4        5
-        ┌──────┬──────┬──────┬──────┬──────┬──────┐
-Value   │  0   │  128 │  0   │  512 │  256 │  0   │
-        └──────┴──────┴──────┴──────┴──────┴──────┘
+- Each bucket stores the offset of the first record in the arena.
+Records are stored sequentially in a contiguous byte slice and linked
+using `nextOffset`, enabling collision handling without heap allocations.
 
-┌──────────────────────────────────────────────────────────────────────┐
-│                              arena                                   │
-│                 (Append-only contiguous byte buffer)                 │
-└──────────────────────────────────────────────────────────────────────┘
+![arena layout](./assets/arena-layout.png)
 
-
-Offset 128
-┌────────┬──────────┬────────────┬───────────┬─────────────┐
-│ keyLen │ valueLen │ nextOffset │ keyBytes  │ valueBytes  │
-│   3    │    5     │    384     │  "name"   │  "hello"    │
-└────────┴──────────┴────────────┴───────────┴─────────────┘
-
-
-Offset 384
-┌────────┬──────────┬────────────┬───────────┬─────────────┐
-│ keyLen │ valueLen │ nextOffset │ keyBytes  │ valueBytes  │
-│   3    │    5     │     0      │  "hello"   │  "world"     │
-└────────┴──────────┴────────────┴───────────┴─────────────┘
-
-Collision Handling
-bucketArray[1] = 128
-128 ("foo") ───► 384 ("bar") ───► 0
-
-    Physical Memory Layout
-----------------------
-arena = [
-  keyLen | valueLen | nextOffset | keyBytes | valueBytes |
-  keyLen | valueLen | nextOffset | keyBytes | valueBytes |
-  keyLen | valueLen | nextOffset | keyBytes | valueBytes |
-  ...
-]
 
 
 ## Getting Started
