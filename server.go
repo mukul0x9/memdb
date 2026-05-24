@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"io"
 	"log"
 	"net"
 )
@@ -35,17 +34,17 @@ func tcpListener(db *DB) {
 
 func handleCon(conn net.Conn, db *DB) {
 	defer func() {
-			if r := recover(); r != nil {
-				log.Printf("CRITICAL: Recovered from panic in worker connection: %v", r)
+		if r := recover(); r != nil {
+			log.Printf("CRITICAL: Recovered from panic in worker connection: %v", r)
 
-				// Inform the benchmark client so it registers as a StatusServerError
-				responseWriter(conn, "ERROR_SERVER_PANIC")
-				responseWriter(conn, "END")
+			// Inform the benchmark client so it registers as a StatusServerError
+			responseWriter(conn, "ERROR_SERVER_PANIC")
+			responseWriter(conn, "END")
 
-				// Explicitly close the connection so the worker client doesn't freeze waiting for data
-				conn.Close()
-			}
-		}()
+			// Explicitly close the connection so the worker client doesn't freeze waiting for data
+			conn.Close()
+		}
+	}()
 	defer conn.Close()
 
 	reader := bufio.NewReader(conn)
@@ -55,14 +54,13 @@ func handleCon(conn net.Conn, db *DB) {
 		cmd, err := validator(reader)
 
 		if err != nil {
-
-			if err == io.EOF {
-				return
+			if _, ok := err.(ValidationError); ok {
+				responseWriter(conn, err.Error())
+				responseWriter(conn, "END")
+				continue
 			}
-
-			responseWriter(conn, err.Error())
-			responseWriter(conn, "END")
-			continue
+			//  socket read error (like EOF or connection reset) -> terminate connection handler
+			return
 		}
 
 		switch cmd.Operation {

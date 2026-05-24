@@ -28,7 +28,6 @@ func (db *DB) del(key string) (string, bool) {
 				db.totalKeys.Add(-1)
 			}
 
-
 			s.wastedBytes += uint32(entrySize)
 
 			//db.usedBytes.Add(-int64(entrySize))

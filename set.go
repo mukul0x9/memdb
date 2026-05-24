@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 )
 
@@ -45,6 +46,7 @@ func (db *DB) set(key string, value string) error {
 		oldKey, oldValue, _, _ := readEntry(s.arena, oldOffset)
 		oldSize := HeaderSize + len(oldKey) + len(oldValue)
 		s.wastedBytes += uint32(oldSize)
+		binary.LittleEndian.PutUint32(s.arena[oldOffset+4:oldOffset+8], uint32(0))
 	}
 
 	entrySize := HeaderSize + len(key) + len(value)

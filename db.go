@@ -63,6 +63,8 @@ func (db *DB) Init() {
 			arena:   make([]byte, 1, ChunkSize),
 		}
 	}
+
+	db.StartCompactionWorker()
 }
 
 func (db *DB) Stats() string {
@@ -101,7 +103,6 @@ func (db *DB) Stats() string {
 		len(db.queue),
 	)
 }
-
 
 func (db *DB) StartCompactionWorker() {
 	go func() {
