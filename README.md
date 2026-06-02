@@ -120,5 +120,3 @@ This is a learning project. Known gaps: no persistence, incomplete edge case han
 - https://github.com/coocood/freecache
 - memcached.org
 - redis.io
-
-TEST..
