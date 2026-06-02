@@ -1,6 +1,6 @@
 # memdb
 
-A Memcached-like in-memory key-value store written in Go — built from scratch with a custom arena allocator, sharded hash map, and background compaction worker.  
+A Memcached-like in-memory key-value store written in Go — built from scratch with a custom arena allocator, sharded hash map, and background compaction worker.
 
 ## How it works
 All key-value data lives in a contiguous []byte slab (arena) per shard, avoiding per-entry heap allocations and reducing GC pressure. The hash table stores uint32 offsets into the arena rather than pointers.
@@ -8,25 +8,25 @@ All key-value data lives in a contiguous []byte slab (arena) per shard, avoiding
 nextOffset = 0 terminates a chain. Updates and deletes mark entries as wasted (valLen = 0). When wasted bytes exceed 25% of shard size, a background worker compacts the arena.
 
 
-## feature 
+## feature
 
 - GET/SET/DEL over TCP text protocol
-- custom hash table based on arena allocator approach. where key and value lives in contiguous bytes in array. reducing GC pressure kind of. 
+- custom hash table based on arena allocator approach. where key and value lives in contiguous bytes in array. reducing GC pressure kind of.
 - 256 shard with rw-locked hash table to minimize mutex lock contention.
-- background compaction worker - triggered when wasted bytes exceed 25% of arena size . reclaim space without blocking other shards. 
-- dynamic rehashing - hashtable doubles at 0.8 load factor. 
-- oom protection - using maxmemory which rejects writes. 
-- STATS command - returns live memory usage across all shards , key count. 
+- background compaction worker - triggered when wasted bytes exceed 25% of arena size . reclaim space without blocking other shards.
+- dynamic rehashing - hashtable doubles at 0.8 load factor.
+- oom protection - using maxmemory which rejects writes.
+- STATS command - returns live memory usage across all shards , key count.
 - Zero external dependencies
 
 
 ### Why 256 shards?
- 
-A single global mutex locks all reads and writes. Sharding distributes lock ownership — each operation only locks 1 of 256 shards, giving ~256x reduction in contention at high concurrency. 
 
-## Arena Layout 
-- bucketArray - > [[][][][][]..] each holding starting offset index of arena array 
-- arena array 
+A single global mutex locks all reads and writes. Sharding distributes lock ownership — each operation only locks 1 of 256 shards, giving ~256x reduction in contention at high concurrency.
+
+## Arena Layout
+- bucketArray - > [[][][][][]..] each holding starting offset index of arena array
+- arena array
 - [keyLen | valueLen | nextOffset | keyBytes | valueBytes|keyLen | valueLen | nextOffset | keyBytes | valueBytes|....]
 
 ```
@@ -91,10 +91,10 @@ go run tcpClient.go
 
 
 ### Protocol
- 
+
 Line-delimited text protocol. Each response is terminated by `END\r\n`.
 
-example- 
+example-
 
 ```
 SET <KEY> <VALUE>\n  -> ok\r\nEND\r\n
@@ -120,3 +120,5 @@ This is a learning project. Known gaps: no persistence, incomplete edge case han
 - https://github.com/coocood/freecache
 - memcached.org
 - redis.io
+
+TEST..
