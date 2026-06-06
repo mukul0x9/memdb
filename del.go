@@ -14,14 +14,14 @@ func (db *DB) del(key string) (string, bool) {
 
 	if s.buckets[finalIndex] != 0 {
 
-		entryOffset, ok := findEntryOffset(s.arena, key, s.buckets[finalIndex])
+		entryOffset, ok := findEntryOffset(s.byteArray, key, s.buckets[finalIndex])
 
 		if ok {
 
-			keyBytes, valueBytes, _, _ := readEntry(s.arena, entryOffset)
+			keyBytes, valueBytes, _, _ := readEntry(s.byteArray, entryOffset)
 			entrySize := HeaderSize + len(keyBytes) + len(valueBytes)
 
-			binary.LittleEndian.PutUint32(s.arena[entryOffset+4:entryOffset+8], uint32(0))
+			binary.LittleEndian.PutUint32(s.byteArray[entryOffset+4:entryOffset+8], uint32(0))
 
 			if s.bucketEntryCount > 0 {
 				s.bucketEntryCount--

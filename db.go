@@ -17,7 +17,7 @@ const (
 	HeaderSize          = 12
 	ChunkSize           = 1024 * 1024
 	WasteRatioThreshold = 0.25
-	MinArenaSize        = 1 << 20 // 1 MB
+	MinbyteArraySize    = 1 << 20 // 1 MB
 )
 
 type Command struct {
@@ -29,15 +29,15 @@ type Command struct {
 type shard struct {
 	mu sync.RWMutex
 
-	buckets []uint32
-	arena   []byte
+	buckets   []uint32
+	byteArray []byte
 
 	bucketEntryCount uint32
 	wastedBytes      uint32
 	isEnqueued       bool
 }
 
-type arenaHeader struct {
+type byteArrayHeader struct {
 	keyLen     uint32
 	valLen     uint32
 	nextOffset uint32
@@ -59,8 +59,8 @@ func (db *DB) Init() {
 
 	for i := range db.shards {
 		db.shards[i] = shard{
-			buckets: make([]uint32, 16384),
-			arena:   make([]byte, 1, ChunkSize),
+			buckets:   make([]uint32, 16384),
+			byteArray: make([]byte, 1, ChunkSize),
 		}
 	}
 
@@ -132,20 +132,20 @@ func (s *shard) CompactSingleThreaded(db *DB) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	oldArenaLen := len(s.arena)
+	oldbyteArrayLen := len(s.byteArray)
 
-	if s.wastedBytes == 0 || len(s.arena) <= 1 {
+	if s.wastedBytes == 0 || len(s.byteArray) <= 1 {
 		return
 	}
 
 	newBuckets := make([]uint32, len(s.buckets))
 
-	liveBytes := len(s.arena) - int(s.wastedBytes)
+	liveBytes := len(s.byteArray) - int(s.wastedBytes)
 	if liveBytes < 1 {
 		liveBytes = 1
 	}
 
-	newArena := make([]byte, 1, liveBytes)
+	newbyteArray := make([]byte, 1, liveBytes)
 
 	var activeEntries uint32
 
@@ -156,7 +156,7 @@ func (s *shard) CompactSingleThreaded(db *DB) {
 		offset := s.buckets[i]
 
 		for offset != 0 {
-			key, value, valLen, nextOffset := readEntry(s.arena, offset)
+			key, value, valLen, nextOffset := readEntry(s.byteArray, offset)
 
 			// Skip deleted entries
 			if valLen == 0 {
@@ -173,9 +173,9 @@ func (s *shard) CompactSingleThreaded(db *DB) {
 
 			seen[keyStr] = struct{}{}
 
-			newOffset := uint32(len(newArena))
+			newOffset := uint32(len(newbyteArray))
 
-			header := arenaHeader{
+			header := byteArrayHeader{
 				keyLen:     uint32(len(key)),
 				valLen:     uint32(len(value)),
 				nextOffset: newBuckets[i],
@@ -184,9 +184,9 @@ func (s *shard) CompactSingleThreaded(db *DB) {
 			headerBuf := make([]byte, HeaderSize)
 			writeHeader(headerBuf, header)
 
-			newArena = append(newArena, headerBuf...)
-			newArena = append(newArena, key...)
-			newArena = append(newArena, value...)
+			newbyteArray = append(newbyteArray, headerBuf...)
+			newbyteArray = append(newbyteArray, key...)
+			newbyteArray = append(newbyteArray, value...)
 
 			newBuckets[i] = newOffset
 			activeEntries++
@@ -196,12 +196,12 @@ func (s *shard) CompactSingleThreaded(db *DB) {
 
 	}
 
-	s.arena = newArena
+	s.byteArray = newbyteArray
 	s.buckets = newBuckets
 	s.bucketEntryCount = activeEntries
 	s.wastedBytes = 0
 
-	savedBytes := int64(oldArenaLen) - int64(len(newArena))
+	savedBytes := int64(oldbyteArrayLen) - int64(len(newbyteArray))
 
 	db.usedBytes.Add(-savedBytes)
 
@@ -211,7 +211,7 @@ func (db *DB) usedMemory() int64 {
 	var total int64
 
 	for i := range db.shards {
-		total += int64(len(db.shards[i].arena))
+		total += int64(len(db.shards[i].byteArray))
 		total += int64(len(db.shards[i].buckets) * 4)
 	}
 
@@ -222,7 +222,7 @@ func (db *DB) reservedMemory() int64 {
 	var total int64
 
 	for i := range db.shards {
-		total += int64(cap(db.shards[i].arena))
+		total += int64(cap(db.shards[i].byteArray))
 		total += int64(len(db.shards[i].buckets) * 4)
 	}
 
@@ -247,12 +247,12 @@ func hashIndex(key string) uint32 {
 	return h.Sum32()
 }
 
-func findEntryOffset(arena []byte, targetKey string, offset uint32) (uint32, bool) {
+func findEntryOffset(byteArray []byte, targetKey string, offset uint32) (uint32, bool) {
 	cur := offset
 	target := []byte(targetKey)
 
 	for cur != 0 {
-		key, _, valLen, nextOffset := readEntry(arena, cur)
+		key, _, valLen, nextOffset := readEntry(byteArray, cur)
 
 		if bytes.Equal(key, target) && valLen != 0 {
 			return cur, true
@@ -263,36 +263,36 @@ func findEntryOffset(arena []byte, targetKey string, offset uint32) (uint32, boo
 	return 0, false
 }
 
-func writeHeader(headerByteBuffer []byte, a arenaHeader) {
+func writeHeader(headerByteBuffer []byte, a byteArrayHeader) {
 	binary.LittleEndian.PutUint32(headerByteBuffer[0:4], a.keyLen)
 	binary.LittleEndian.PutUint32(headerByteBuffer[4:8], a.valLen)
 	binary.LittleEndian.PutUint32(headerByteBuffer[8:12], a.nextOffset)
 
 }
 
-func getNextOffsetOfCurrent(arena []byte, offset uint32) (nextOffset uint32) {
-	nextOffset = binary.LittleEndian.Uint32(arena[offset+8 : offset+12])
+func getNextOffsetOfCurrent(byteArray []byte, offset uint32) (nextOffset uint32) {
+	nextOffset = binary.LittleEndian.Uint32(byteArray[offset+8 : offset+12])
 	return
 }
 
-func readEntry(arena []byte, offset uint32) (key []byte, value []byte, valLen uint32, nextOffset uint32) {
-	keyLen := binary.LittleEndian.Uint32(arena[offset : offset+4])
+func readEntry(byteArray []byte, offset uint32) (key []byte, value []byte, valLen uint32, nextOffset uint32) {
+	keyLen := binary.LittleEndian.Uint32(byteArray[offset : offset+4])
 
-	valLen = binary.LittleEndian.Uint32(arena[offset+4 : offset+8])
-	nextOffset = binary.LittleEndian.Uint32(arena[offset+8 : offset+12])
+	valLen = binary.LittleEndian.Uint32(byteArray[offset+4 : offset+8])
+	nextOffset = binary.LittleEndian.Uint32(byteArray[offset+8 : offset+12])
 
 	keyStart := offset + 12
 	keyEnd := keyStart + keyLen
 	valStart := keyEnd
 	valEnd := valStart + valLen
 
-	key = arena[keyStart:keyEnd]
+	key = byteArray[keyStart:keyEnd]
 
-	value = arena[valStart:valEnd]
+	value = byteArray[valStart:valEnd]
 	return
 }
 
-func growArena(old []byte, requiredEntry int) []byte {
+func growbyteArray(old []byte, requiredEntry int) []byte {
 	newCap := cap(old) * 2
 
 	if newCap == 0 {
@@ -303,13 +303,13 @@ func growArena(old []byte, requiredEntry int) []byte {
 		newCap = newCap * 2
 	}
 
-	newArena := make([]byte, len(old), newCap)
+	newbyteArray := make([]byte, len(old), newCap)
 
-	copy(newArena, old)
-	return newArena
+	copy(newbyteArray, old)
+	return newbyteArray
 }
-func writeNextOffset(arena []byte, offset uint32, nextOffset uint32) {
-	binary.LittleEndian.PutUint32(arena[offset+8:offset+12], nextOffset)
+func writeNextOffset(byteArray []byte, offset uint32, nextOffset uint32) {
+	binary.LittleEndian.PutUint32(byteArray[offset+8:offset+12], nextOffset)
 }
 
 func rebuildBucket(old []byte, bucketLen int) []uint32 {
@@ -341,13 +341,13 @@ func rebuildBucket(old []byte, bucketLen int) []uint32 {
 
 }
 
-func getValue(arena []byte, targetKey string, offset uint32) (string, bool) {
+func getValue(byteArray []byte, targetKey string, offset uint32) (string, bool) {
 	cur := offset
 
 	target := []byte(targetKey)
 
 	for cur != 0 {
-		key, value, valLen, nextOffset := readEntry(arena, cur)
+		key, value, valLen, nextOffset := readEntry(byteArray, cur)
 
 		if bytes.Equal(key, target) && valLen != 0 {
 			return string(value), true

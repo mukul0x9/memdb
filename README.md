@@ -1,19 +1,19 @@
 # memdb
 
-A Memcached-like in-memory key-value store written in Go — built from scratch with a custom arena allocator, sharded hash map, and background compaction worker.
+A Memcached-like in-memory key-value store written in Go — built from scratch with a custom byteArray allocator, sharded hash map, and background compaction worker.
 
 ## How it works
-All key-value data lives in a contiguous []byte slab (arena) per shard, avoiding per-entry heap allocations and reducing GC pressure. The hash table stores uint32 offsets into the arena rather than pointers.
+All key-value data lives in a contiguous []byte slab (byteArray) per shard, avoiding per-entry heap allocations and reducing GC pressure. The hash table stores uint32 offsets into the byteArray rather than pointers.
 
-nextOffset = 0 terminates a chain. Updates and deletes mark entries as wasted (valLen = 0). When wasted bytes exceed 25% of shard size, a background worker compacts the arena.
+nextOffset = 0 terminates a chain. Updates and deletes mark entries as wasted (valLen = 0). When wasted bytes exceed 25% of shard size, a background worker compacts the byteArray.
 
 
 ## feature
 
 - GET/SET/DEL over TCP text protocol
-- custom hash table based on arena allocator approach. where key and value lives in contiguous bytes in array. reducing GC pressure kind of.
+- custom hash table based on byteArray allocator approach. where key and value lives in contiguous bytes in array. reducing GC pressure kind of.
 - 256 shard with rw-locked hash table to minimize mutex lock contention.
-- background compaction worker - triggered when wasted bytes exceed 25% of arena size . reclaim space without blocking other shards.
+- background compaction worker - triggered when wasted bytes exceed 25% of byteArray size . reclaim space without blocking other shards.
 - dynamic rehashing - hashtable doubles at 0.8 load factor.
 - oom protection - using maxmemory which rejects writes.
 - STATS command - returns live memory usage across all shards , key count.
@@ -24,15 +24,15 @@ nextOffset = 0 terminates a chain. Updates and deletes mark entries as wasted (v
 
 A single global mutex locks all reads and writes. Sharding distributes lock ownership — each operation only locks 1 of 256 shards, giving ~256x reduction in contention at high concurrency.
 
-## Arena Layout
-- bucketArray - > [[][][][][]..] each holding starting offset index of arena array
-- arena array
+## byteArray Layout
+- bucketArray - > [[][][][][]..] each holding starting offset index of byteArray array
+- byteArray array
 - [keyLen | valueLen | nextOffset | keyBytes | valueBytes|keyLen | valueLen | nextOffset | keyBytes | valueBytes|....]
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │                           bucketArray                                │
-│        (Hash table buckets store offsets into the arena)             │
+│        (Hash table buckets store offsets into the byteArray)             │
 └──────────────────────────────────────────────────────────────────────┘
 Index      0        1        2        3        4        5
         ┌──────┬──────┬──────┬──────┬──────┬──────┐
@@ -40,7 +40,7 @@ Value   │  0   │  128 │  0   │  512 │  256 │  0   │
         └──────┴──────┴──────┴──────┴──────┴──────┘
 
 ┌──────────────────────────────────────────────────────────────────────┐
-│                              arena                                   │
+│                              byteArray                                   │
 │                 (Append-only contiguous byte buffer)                 │
 └──────────────────────────────────────────────────────────────────────┘
 
@@ -64,7 +64,7 @@ bucketArray[1] = 128
 
     Physical Memory Layout
 ----------------------
-arena = [
+byteArray = [
   keyLen | valueLen | nextOffset | keyBytes | valueBytes |
   keyLen | valueLen | nextOffset | keyBytes | valueBytes |
   keyLen | valueLen | nextOffset | keyBytes | valueBytes |

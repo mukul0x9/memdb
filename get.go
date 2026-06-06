@@ -12,7 +12,7 @@ func (db *DB) get(key string) (string, bool) {
 	if s.buckets[finalIndex] != 0 {
 		offset := s.buckets[finalIndex]
 
-		value, ok := getValue(s.arena, key, offset)
+		value, ok := getValue(s.byteArray, key, offset)
 
 		if ok {
 			return value, true

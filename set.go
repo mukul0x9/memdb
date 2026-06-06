@@ -18,8 +18,8 @@ func (db *DB) set(key string, value string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(s.arena) >= MinArenaSize {
-		if float64(s.wastedBytes)/float64(len(s.arena)) >= WasteRatioThreshold && !s.isEnqueued {
+	if len(s.byteArray) >= MinbyteArraySize {
+		if float64(s.wastedBytes)/float64(len(s.byteArray)) >= WasteRatioThreshold && !s.isEnqueued {
 			s.isEnqueued = true
 			select {
 			case db.queue <- h:
@@ -40,13 +40,13 @@ func (db *DB) set(key string, value string) error {
 
 	nextOffset := s.buckets[finalIndex]
 
-	oldOffset, found := findEntryOffset(s.arena, key, nextOffset)
+	oldOffset, found := findEntryOffset(s.byteArray, key, nextOffset)
 
 	if found {
-		oldKey, oldValue, _, _ := readEntry(s.arena, oldOffset)
+		oldKey, oldValue, _, _ := readEntry(s.byteArray, oldOffset)
 		oldSize := HeaderSize + len(oldKey) + len(oldValue)
 		s.wastedBytes += uint32(oldSize)
-		binary.LittleEndian.PutUint32(s.arena[oldOffset+4:oldOffset+8], uint32(0))
+		binary.LittleEndian.PutUint32(s.byteArray[oldOffset+4:oldOffset+8], uint32(0))
 	}
 
 	entrySize := HeaderSize + len(key) + len(value)
@@ -62,7 +62,7 @@ func (db *DB) set(key string, value string) error {
 	loadFactor := float64(s.bucketEntryCount) / float64(len(s.buckets))
 
 	if loadFactor > 0.8 {
-		newBuckets := rebuildBucket(s.arena, len(s.buckets)*2)
+		newBuckets := rebuildBucket(s.byteArray, len(s.buckets)*2)
 
 		if len(newBuckets) == 0 {
 			db.usedBytes.Add(-int64(entrySize))
@@ -74,16 +74,16 @@ func (db *DB) set(key string, value string) error {
 
 	}
 
-	if len(s.arena)+entrySize > cap(s.arena) {
-		s.arena = growArena(s.arena, entrySize)
+	if len(s.byteArray)+entrySize > cap(s.byteArray) {
+		s.byteArray = growbyteArray(s.byteArray, entrySize)
 
-		if len(s.arena)+entrySize > cap(s.arena) {
+		if len(s.byteArray)+entrySize > cap(s.byteArray) {
 			db.usedBytes.Add(-int64(entrySize))
-			return fmt.Errorf("arena growth failed")
+			return fmt.Errorf("byteArray growth failed")
 		}
 	}
 
-	headerStruct := arenaHeader{
+	headerStruct := byteArrayHeader{
 		keyLen:     uint32(len(keyByte)),
 		valLen:     uint32(len(valueByte)),
 		nextOffset: nextOffset,
@@ -93,11 +93,11 @@ func (db *DB) set(key string, value string) error {
 
 	writeHeader(headerBuffer, headerStruct)
 
-	newOffset := uint32(len(s.arena))
+	newOffset := uint32(len(s.byteArray))
 
-	s.arena = append(s.arena, headerBuffer...)
-	s.arena = append(s.arena, keyByte...)
-	s.arena = append(s.arena, valueByte...)
+	s.byteArray = append(s.byteArray, headerBuffer...)
+	s.byteArray = append(s.byteArray, keyByte...)
+	s.byteArray = append(s.byteArray, valueByte...)
 
 	s.buckets[finalIndex] = newOffset
 
