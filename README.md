@@ -3,7 +3,7 @@
 A Memcached-like in-memory key-value store written in Go — built from scratch with a custom byteArray allocator, sharded hash map, and background compaction worker.
 
 ## How it works
-All key-value data lives in a contiguous []byte slab (byteArray) per shard, avoiding per-entry heap allocations and reducing GC pressure. The hash table stores uint32 offsets into the byteArray rather than pointers.
+All key-value data lives in a contiguous []byte slab (byteArray) per shard,The hash table stores uint32 offsets into the byteArray rather than pointers.
 
 nextOffset = 0 terminates a chain. Updates and deletes mark entries as wasted (valLen = 0). When wasted bytes exceed 25% of shard size, a background worker compacts the byteArray.
 
@@ -11,7 +11,7 @@ nextOffset = 0 terminates a chain. Updates and deletes mark entries as wasted (v
 ## feature
 
 - GET/SET/DEL over TCP text protocol
-- custom hash table based on byteArray allocator approach. where key and value lives in contiguous bytes in array. reducing GC pressure kind of.
+- custom hash table based on byteArray allocator approach. where key and value lives in contiguous bytes in array. 
 - 256 shard with rw-locked hash table to minimize mutex lock contention.
 - background compaction worker - triggered when wasted bytes exceed 25% of byteArray size . reclaim space without blocking other shards.
 - dynamic rehashing - hashtable doubles at 0.8 load factor.

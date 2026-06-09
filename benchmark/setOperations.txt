@@ -1,0 +1,10 @@
+
+- byteArray
+total sets : 5335196
+duration : 1m0.005542886s
+RPS : 88911.72
+
+- nativeHashmap
+total sets : 5795965
+duration : 1m0.002130473s
+RPS : 96595.99

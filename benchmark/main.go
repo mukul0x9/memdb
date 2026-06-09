@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	serverAddr   = "127.0.0.1:8888" // Your custom TCP DB address
-	concurrency  = 100              // 100 concurrent workers
-	testDuration = 1 * time.Minute  // Run for exactly 1 minute
+	serverAddr   = "127.0.0.1:8080"
+	concurrency  = 100             // 100 concurrent workers
+	testDuration = 1 * time.Minute // 1 minute
 	charset      = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	keyLength    = 16
 	valueLength  = 256

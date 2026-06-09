@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	serverAddr := "127.0.0.1:8888"
+	serverAddr := "127.0.0.1:8080"
 
 	fmt.Printf("Connecting to TCP server at %s...\n", serverAddr)
 
